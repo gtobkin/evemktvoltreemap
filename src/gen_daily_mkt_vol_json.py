@@ -1,5 +1,5 @@
 # imports
-import requests, pprint, time
+import requests, pprint, time, threading
 
 # constants
 CREST_URL_ENDPOINTS		= "https://crest-tq.eveonline.com"
@@ -11,6 +11,7 @@ FILE_MARKETTYPES	= "../txt/markettypes.txt"
 FILE_MARKETGROUPS	= "../txt/marketgroups.txt"
 
 CREST_RATE_LIMIT	= 150 # non-authorized requests per second; we'll stay below this
+NUM_WORKER_THREADS	= 15 # slow calls to the CREST /history/ endpoint are parallelized
 
 # tree code
 class MarketNode(object):
@@ -67,28 +68,76 @@ for marketGroup in marketGroupsData["items"]:
 # for each markettype, for yesterday + today, pull and calculate px*vol, and delta
 
 reqsPerSec = round(CREST_RATE_LIMIT * 0.80)
-# i = 0
-for type in marketTypes:
-	# no need for throttling, we're going at 2-3 requests per second, not 150
-	# a possible optimization would be to parallelize the requests; maybe throttle then
-	'''
-	if i == reqsPerSec:
+i = 0 # index of next element of marketTypes to process
+j = 0 # number of elements processed so far in this bucket (one second)
+empties = [] # types that contain empty history data, so index [-1] is out of bounds
+lock = threading.Lock()
+
+def resetLimit():
+	global i, j
+	while True :
+		if i == len(marketTypes):
+			return
+		j = 0
 		time.sleep(1)
-		i = 0
-	'''
-	url = CREST_URL_PREFIX_HISTORY_FORGE + marketTypes[type].crest_url
-	history = requests.get(url).json()
-	marketTypes[type].px_x_vol = history["items"][-1]["avgPrice"] * history["items"][-1]["volume"]
-	marketTypes[type].px_x_vol_delta = (marketTypes[type].px_x_vol
-		- history["items"][-2]["avgPrice"] * history["items"][-2]["volume"])
-	# i += 1
-	'''
-	print i, "/", len(marketTypes)
-	print "  NAME:", marketTypes[type].name
-	print "  PX*V:", marketTypes[type].px_x_vol
-	print "  DELT:", marketTypes[type].px_x_vol_delta
-	'''
+
+def worker():
+	global i, j
+	td = threading.local() # thread-local data
+	while True:
+		if i == len(marketTypes):
+			return
+		if j == reqsPerSec:
+			time.sleep(0.01)
+			continue
+		lock.acquire()
+		if j == reqsPerSec:
+			lock.release()
+			time.sleep(0.01)
+			continue
+		# got the lock and we're not up against throttling constraints; proceed
+		td.typePair	= marketTypes.items()[i] # locked access of i
+		i += 1
+		lock.release()
+		td.typeKey 	= td.typePair[0]
+		td.typeValue	= td.typePair[1]
+		td.url = CREST_URL_PREFIX_HISTORY_FORGE + td.typeValue.crest_url
+		td.history = requests.get(td.url).json()
+		if len(td.history["items"]) < 2: # need two, not one, because we calc delta
+			# print "Found insufficient history for type:", td.typeKey
+			empties.append(td.typeKey)
+			continue
+		td.typeValue.px_x_vol = td.history["items"][-1]["avgPrice"] * td.history["items"][-1]["volume"]
+		td.typeValue.px_x_vol_delta = (td.typeValue.px_x_vol
+			- td.history["items"][-2]["avgPrice"] * td.history["items"][-2]["volume"])
+		# print "Completed history query for:", td.typeKey
+
+r = threading.Thread(target=resetLimit)
+r.start()
+workers = []
+for k in range(NUM_WORKER_THREADS):
+	t = threading.Thread(target=worker)
+	workers.append(t)
+	t.start()
+	
+# now wait for the workers to finish their queries
+r.join()
+for k in workers:
+	k.join()
+
+# print "Done!"
 
 # given today's mkt vol and daily change, generate Javascript array for Treemap
-
+'''
+js_array_str  = "[\n"
+js_array_str += "['Location', 'Parent', 'Market trade volume (size)', 'Market increase/decrease (color)'],\n"
+js_array_str += "['Everything', null, 0, 0],\n"
+for marketGroup, marketNode in marketGroups:
+	if marketNode.parent == None:
+		js_array_str += "['" + marketNode.name + "', 'Everything', 0, 0],\n"
+	else:
+		js_array_str += "['" + marketNode.name + "', '" + marketGroups[marketNode.parent].name + "', 0, 0],\n"
+for marketType, marketNode in marketTypes:
+	if marketNode.
+'''
 # save array in two locations: 1) datestamped archive copy 2) running "current" file for display
