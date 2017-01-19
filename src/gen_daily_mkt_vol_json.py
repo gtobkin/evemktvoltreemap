@@ -9,6 +9,7 @@ CREST_URL_PREFIX_HISTORY_FORGE	= "https://crest-tq.eveonline.com/market/10000002
 
 FILE_MARKETTYPES	= "../txt/markettypes.txt"
 FILE_MARKETGROUPS	= "../txt/marketgroups.txt"
+FILE_PREFIX_OUTPUT	= "../out/"
 
 CREST_RATE_LIMIT	= 150 # non-authorized requests per second; we'll stay below this
 NUM_WORKER_THREADS	= 15 # slow calls to the CREST /history/ endpoint are parallelized
@@ -70,6 +71,7 @@ for marketGroup in marketGroupsData["items"]:
 reqsPerSec = round(CREST_RATE_LIMIT * 0.80)
 i = 0 # index of next element of marketTypes to process
 j = 0 # number of elements processed so far in this bucket (one second)
+dateStr = None
 empties = [] # types that contain empty history data, so index [-1] is out of bounds
 lock = threading.Lock()
 
@@ -77,15 +79,17 @@ def resetLimit():
 	global i, j
 	while True :
 		if i == len(marketTypes):
+		# if i == 50:
 			return
 		j = 0
 		time.sleep(1)
 
 def worker():
-	global i, j
+	global i, j, dateStr
 	td = threading.local() # thread-local data
 	while True:
 		if i == len(marketTypes):
+		# if i == 50:
 			return
 		if j == reqsPerSec:
 			time.sleep(0.01)
@@ -107,6 +111,10 @@ def worker():
 			# print "Found insufficient history for type:", td.typeKey
 			empties.append(td.typeKey)
 			continue
+		#if dateStr == None: # thread unsafe, but I'm assuming they're all the same date
+		#	dateStr = td.history["items"][-1]["date"][0:10]
+		print td.history["items"][-1]["date"][0:10]
+		# TODO: eliminate marketTypes with most-recent dates that aren't yesterday!
 		td.typeValue.px_x_vol = td.history["items"][-1]["avgPrice"] * td.history["items"][-1]["volume"]
 		td.typeValue.px_x_vol_delta = (td.typeValue.px_x_vol
 			- td.history["items"][-2]["avgPrice"] * td.history["items"][-2]["volume"])
@@ -125,19 +133,29 @@ r.join()
 for k in workers:
 	k.join()
 
+print dateStr
 # print "Done!"
 
 # given today's mkt vol and daily change, generate Javascript array for Treemap
-'''
+
 js_array_str  = "[\n"
 js_array_str += "['Location', 'Parent', 'Market trade volume (size)', 'Market increase/decrease (color)'],\n"
 js_array_str += "['Everything', null, 0, 0],\n"
-for marketGroup, marketNode in marketGroups:
+
+for marketGroup, marketNode in marketGroups.iteritems():
 	if marketNode.parent == None:
 		js_array_str += "['" + marketNode.name + "', 'Everything', 0, 0],\n"
 	else:
-		js_array_str += "['" + marketNode.name + "', '" + marketGroups[marketNode.parent].name + "', 0, 0],\n"
-for marketType, marketNode in marketTypes:
-	if marketNode.
-'''
+		js_array_str += "['" + marketNode.name + "', '" + marketNode.parent.name + "', 0, 0],\n"
+for marketType, marketNode in marketTypes.iteritems():
+	if marketNode.px_x_vol == None:
+		js_array_str += "['" + marketNode.name + "', '" + marketNode.parent.name + "', 0, 0],\n"
+	else:
+		js_array_str += "['" + marketNode.name + "', '" + marketNode.parent.name + "', " + str(round(marketNode.px_x_vol, 2)) + ", " + str(round(marketNode.px_x_vol_delta, 2)) + "],\n"
+
+js_array_str = js_array_str[:-2] # trim off terminal ",\n"; we want to remove the comma
+js_array_str += "\n]"
+
+print js_array_str
+
 # save array in two locations: 1) datestamped archive copy 2) running "current" file for display
