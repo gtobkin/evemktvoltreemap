@@ -213,7 +213,10 @@ for marketGroup, marketNode in marketGroups.iteritems():
 	else:
 		js_array_str += "[\"%s (%d)\", \"%s (%d)\", 0, 0],\n" % (marketNode.name, marketNode.id, marketNode.parent.name, marketNode.parent.id)
 for marketType, marketNode in marketTypes.iteritems():
-	js_array_str += "[\"%s (%d)\", \"%s (%d)\", %0.2f, %0.2f],\n" % (marketNode.name, marketNode.id, marketNode.parent.name, marketNode.parent.id, marketNode.px_x_vol, marketNode.px_x_vol_delta)
+	# Replace double quotes with single quotes in market type name
+	# double quotes delineate strings in the final text
+	# only observed in one type, the 'SPZ-3 "Torch" Laser Sight Combat Ocular Enhancer (right/black)'
+	js_array_str += "[\"%s (%d)\", \"%s (%d)\", %0.2f, %0.2f],\n" % (marketNode.name.replace('"', "'"), marketNode.id, marketNode.parent.name, marketNode.parent.id, marketNode.px_x_vol, marketNode.px_x_vol_delta)
 
 js_array_str = js_array_str[:-2] # trim off terminal ",\n"; we want to remove the comma
 js_array_str += "\n]"
