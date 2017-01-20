@@ -13,7 +13,8 @@ FILE_MARKETGROUPS	= "../txt/marketgroups.txt"
 FILE_PREFIX_OUTPUT	= "../out/mkt_vol_array_"
 
 CREST_RATE_LIMIT	= 150 # non-authorized requests per second; we'll stay below this
-NUM_WORKER_THREADS	= 15 # slow calls to the CREST /history/ endpoint are parallelized
+NUM_WORKER_THREADS	= 20 # slow calls to the CREST /history/ endpoint are parallelized
+HIST_CALL_PRINT_MOD	= 100 # print out a status update every n'th call to the /history endpoint
 
 # tree code
 class MarketNode(object):
@@ -55,14 +56,14 @@ response = requests.get(CREST_URL_MARKETTYPES).json()
 marketTypesData = response["items"]
 pageCount = response["pageCount"]
 print "Pulled market types page", page, "of", pageCount
-'''
+#'''
 while page < pageCount:
 	nextUrl = response["next"]["href"]
 	response = requests.get(nextUrl).json()
 	marketTypesData.extend(response["items"])
 	page += 1
 	print "Pulled market types page", page, "of", pageCount
-'''
+#'''
 with open(FILE_MARKETTYPES, 'wt') as outfile:
 	pprint.pprint(marketTypesData, stream=outfile)
 
@@ -100,18 +101,21 @@ for marketGroup in marketGroupsData:
 	if "parentGroup" in marketGroup: # not all market groups have parents
 		marketGroups[marketGroup["id"]].parent = marketGroups[marketGroup["parentGroup"]["id"]]
 print "OK"
+print ""
 
 # for each markettype, pull history
 # if <2 days history or most recent isn't yesterday, drop market type
 # otherwise, for yesterday + today, calculate px*vol and delta
-
-print "Beginning CREST history calls with", NUM_WORKER_THREADS, "threads"
 
 reqsPerSec = round(CREST_RATE_LIMIT * 0.80)
 i = 0 # index of next element of marketTypes to process
 j = 0 # number of elements processed so far in this bucket (one second)
 lock = threading.Lock()
 marketTypesToDrop = []
+
+print "Beginning CREST history calls with", NUM_WORKER_THREADS, "threads"
+print "Limiting CREST calls to %d/sec" % reqsPerSec
+print ""
 
 def resetLimit():
 	global i, j
@@ -133,16 +137,21 @@ def worker():
 			time.sleep(0.01)
 			continue
 		lock.acquire()
+		if i == len(marketTypes):
+			# if i == 300:
+			lock.release()
+			return
 		if j == reqsPerSec:
 			lock.release()
 			time.sleep(0.01)
 			continue
 		# got the lock and we're not up against throttling constraints; proceed
-		print "Processing i =", i
+		# print "Processing i =", i
 		td.typePair	= marketTypes.items()[i] # locked access of i
-		if i % 10 == 0:
+		if i % HIST_CALL_PRINT_MOD == 0:
 			print "Processing marketType", i, "of", len(marketTypes)
 		i += 1
+		j += 1
 		lock.release()
 		td.typeKey 	= td.typePair[0]
 		td.typeValue	= td.typePair[1]
@@ -184,7 +193,9 @@ for k in workers:
 
 print "Dropping", len(marketTypesToDrop), "market types with invalid/insufficient market history:"
 for marketType in marketTypesToDrop:
-	print " ", marketTypes[marketType].name.ljust(65, " "), "/", str(marketTypes[marketType].id).rjust(8, " ")
+	formattedStr = "  %-65s/%8d" % (marketTypes[marketType].name, marketTypes[marketType].id)
+	print formattedStr.encode('utf-8')
+	#print " ", marketTypes[marketType].name.ljust(65, " "), "/", str(marketTypes[marketType].id).rjust(8, " ")
 	marketTypes.pop(marketType, None)
 print ""
 
@@ -209,15 +220,16 @@ for marketType, marketNode in marketTypes.iteritems():
 
 js_array_str = js_array_str[:-2] # trim off terminal ",\n"; we want to remove the comma
 js_array_str += "\n]"
+js_array_str = js_array_str.encode('utf-8')
 
 # save array in two locations: 1) datestamped archive copy 2) running "current" file for display
 
 archiveFileStr = FILE_PREFIX_OUTPUT + targetDateStr
 currentFileStr = FILE_PREFIX_OUTPUT + "current"
-print "Datestamped JS array output file:", archiveFileStr
-print "Current JS array output file:    ", currentFileStr
+print "Datestamped JS array output file:   ", archiveFileStr
+print "Current JS array output file:       ", currentFileStr
 outfile = open(archiveFileStr, "w")
 outfile.write(js_array_str)
 outfile.close()
 shutil.copyfile(archiveFileStr, currentFileStr)
-print "Files saved."
+print "Success! Files saved."
