@@ -56,14 +56,14 @@ response = requests.get(CREST_URL_MARKETTYPES).json()
 marketTypesData = response["items"]
 pageCount = response["pageCount"]
 print "Pulled market types page", page, "of", pageCount
-'''
+
 while page < pageCount:
 	nextUrl = response["next"]["href"]
 	response = requests.get(nextUrl).json()
 	marketTypesData.extend(response["items"])
 	page += 1
 	print "Pulled market types page", page, "of", pageCount
-'''
+
 with open(FILE_MARKETTYPES, 'wt') as outfile:
 	pprint.pprint(marketTypesData, stream=outfile)
 
@@ -209,14 +209,11 @@ js_array_str += "['Everything', null, 0, 0],\n"
 
 for marketGroup, marketNode in marketGroups.iteritems():
 	if marketNode.parent == None:
-		js_array_str += "[\"" + marketNode.name + "\", 'Everything', 0, 0],\n"
+		js_array_str += "[\"%s (%d)\", 'Everything', 0, 0],\n" % (marketNode.name, marketNode.id)
 	else:
-		js_array_str += "[\"" + marketNode.name + "\", \"" + marketNode.parent.name + "\", 0, 0],\n"
+		js_array_str += "[\"%s (%d)\", \"%s (%d)\", 0, 0],\n" % (marketNode.name, marketNode.id, marketNode.parent.name, marketNode.parent.id)
 for marketType, marketNode in marketTypes.iteritems():
-	if marketNode.px_x_vol == None:
-		js_array_str += "[\"" + marketNode.name + "\", \"" + marketNode.parent.name + "\", 0, 0],\n"
-	else:
-		js_array_str += "[\"" + marketNode.name + "\", \"" + marketNode.parent.name + "\", " + str(round(marketNode.px_x_vol, 2)) + ", " + str(round(marketNode.px_x_vol_delta, 2)) + "],\n"
+	js_array_str += "[\"%s (%d)\", \"%s (%d)\", %0.2f, %0.2f],\n" % (marketNode.name, marketNode.id, marketNode.parent.name, marketNode.parent.id, marketNode.px_x_vol, marketNode.px_x_vol_delta)
 
 js_array_str = js_array_str[:-2] # trim off terminal ",\n"; we want to remove the comma
 js_array_str += "\n]"
